@@ -6,13 +6,14 @@ import os
 import asyncio
 from datetime import datetime, timedelta
 import aiohttp
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ---- CONFIGURATION ----
-import os
-from dotenv import load_dotenv
-load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 PLACES_MAX = 7
+SALON_DEFAUT = 1503786814803279876
 # -----------------------
 
 intents = discord.Intents.default()
@@ -37,7 +38,7 @@ async def get_affiche(film):
     url = f"https://www.omdbapi.com/?t={film}&apikey=trilogy"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                 data = await resp.json()
                 if data.get("Poster") and data["Poster"] != "N/A":
                     return data["Poster"]
@@ -128,24 +129,23 @@ async def verifier_rappels():
             try:
                 date_seance = datetime.strptime(f"{s['date']} {s['heure']}", "%d/%m/%Y %Hh%M")
                 if demain.date() == date_seance.date() and not s.get("rappel_envoye"):
-                    channel_id = s.get("channel_id")
-                    if channel_id:
-                        channel = bot.get_channel(channel_id)
-                        if channel:
-                            inscrits = ", ".join(s["inscrits"]) if s["inscrits"] else "personne"
-                            await channel.send(
-                                f"🔔 **Rappel !** La séance **{s['film']}** a lieu **demain** à **{s['heure']}** !\n"
-                                f"👥 Inscrits : {inscrits}"
-                            )
-                            seances[cle]["rappel_envoye"] = True
-                            sauvegarder_seances(seances)
+                    channel_id = s.get("channel_id", SALON_DEFAUT)
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        inscrits = ", ".join(s["inscrits"]) if s["inscrits"] else "personne"
+                        await channel.send(
+                            f"🔔 **Rappel !** La séance **{s['film']}** a lieu **demain** à **{s['heure']}** !\n"
+                            f"👥 Inscrits : {inscrits}"
+                        )
+                        seances[cle]["rappel_envoye"] = True
+                        sauvegarder_seances(seances)
             except:
                 pass
         await asyncio.sleep(3600)
 
 @bot.tree.command(name="ajouter_seance", description="Ajouter une séance de cinéma")
-@app_commands.describe(film="Nom du film", date="Date (ex: 25/12/2025)", heure="Heure (ex: 20h30)")
-async def ajouter_seance(interaction: discord.Interaction, film: str, date: str, heure: str):
+@app_commands.describe(film="Nom du film", date="Date (ex: 25/12/2025)", heure="Heure (ex: 20h30)", salon="Salon où poster la séance (optionnel)")
+async def ajouter_seance(interaction: discord.Interaction, film: str, date: str, heure: str, salon: discord.TextChannel = None):
     seances = charger_seances()
     cle = f"{film}_{date}_{heure}"
     if cle in seances:
@@ -153,17 +153,24 @@ async def ajouter_seance(interaction: discord.Interaction, film: str, date: str,
         return
     await interaction.response.defer()
     affiche = await get_affiche(film)
+
+    # Utilise le salon choisi ou le salon par défaut
+    channel = salon if salon else bot.get_channel(SALON_DEFAUT)
+    if not channel:
+        channel = interaction.channel
+
     seances[cle] = {
         "film": film,
         "date": date,
         "heure": heure,
         "inscrits": [],
         "affiche": affiche,
-        "channel_id": interaction.channel_id,
+        "channel_id": channel.id,
         "rappel_envoye": False
     }
     sauvegarder_seances(seances)
-    await interaction.followup.send(embed=creer_embed(seances[cle], cle), view=BoutonSeance(cle))
+    await channel.send(embed=creer_embed(seances[cle], cle), view=BoutonSeance(cle))
+    await interaction.followup.send(f"✅ Séance ajoutée dans {channel.mention} !", ephemeral=True)
 
 @bot.tree.command(name="seances", description="Voir toutes les séances disponibles")
 async def voir_seances(interaction: discord.Interaction):
@@ -173,7 +180,9 @@ async def voir_seances(interaction: discord.Interaction):
         return
     await interaction.response.defer()
     for cle, s in seances.items():
-        await interaction.channel.send(embed=creer_embed(s, cle), view=BoutonSeance(cle))
+        channel_id = s.get("channel_id", SALON_DEFAUT)
+        channel = bot.get_channel(channel_id) or interaction.channel
+        await channel.send(embed=creer_embed(s, cle), view=BoutonSeance(cle))
     await interaction.followup.send("📋 Voici toutes les séances !", ephemeral=True)
 
 @bot.tree.command(name="supprimer_seance", description="Supprimer une séance (admin uniquement)")
