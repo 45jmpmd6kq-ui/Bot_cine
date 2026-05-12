@@ -127,10 +127,24 @@ async def verifier_rappels():
         seances = charger_seances()
         maintenant = datetime.now()
         demain = maintenant + timedelta(days=1)
+        a_supprimer = []
+
         for cle, s in seances.items():
             try:
                 date_seance = datetime.strptime(f"{s['date']} {s['heure']}", "%d/%m/%Y %Hh%M")
-                if demain.date() == date_seance.date() and not s.get("rappel_envoye"):
+
+                # Suppression automatique si la séance est passée
+                if maintenant > date_seance:
+                    a_supprimer.append(cle)
+                    channel_id = s.get("channel_id", SALON_DEFAUT)
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        await channel.send(
+                            f"🎬 La séance **{s['film']}** du {s['date']} à {s['heure']} est terminée et a été supprimée automatiquement !"
+                        )
+
+                # Rappel la veille
+                elif demain.date() == date_seance.date() and not s.get("rappel_envoye"):
                     channel_id = s.get("channel_id", SALON_DEFAUT)
                     channel = bot.get_channel(channel_id)
                     if channel:
@@ -143,6 +157,13 @@ async def verifier_rappels():
                         sauvegarder_seances(seances)
             except:
                 pass
+
+        # Supprime les séances passées
+        for cle in a_supprimer:
+            del seances[cle]
+        if a_supprimer:
+            sauvegarder_seances(seances)
+
         await asyncio.sleep(3600)
 
 @bot.tree.command(name="ajouter_seance", description="Ajouter une séance de cinéma")
