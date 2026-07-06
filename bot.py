@@ -5,6 +5,7 @@ import json
 import os
 import asyncio
 from datetime import datetime, timedelta
+from urllib.parse import quote
 import aiohttp
 from dotenv import load_dotenv
 from keep_alive import keep_alive
@@ -14,6 +15,8 @@ load_dotenv()
 
 # ---- CONFIGURATION ----
 TOKEN = os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    raise SystemExit("❌ DISCORD_TOKEN manquant dans le fichier .env")
 PLACES_MAX = 7
 SALON_DEFAUT = 1503786814803279876
 # -----------------------
@@ -37,15 +40,15 @@ def sauvegarder_seances(data):
         json.dump(data, f, indent=2)
 
 async def get_affiche(film):
-    url = f"https://www.omdbapi.com/?t={film}&apikey=trilogy"
+    url = f"https://www.omdbapi.com/?t={quote(film)}&apikey=trilogy"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
                 data = await resp.json()
                 if data.get("Poster") and data["Poster"] != "N/A":
                     return data["Poster"]
-    except:
-        pass
+    except Exception as e:
+        print(f"⚠️ Erreur récupération affiche pour '{film}': {e}")
     return None
 
 def creer_embed(s, cle):
@@ -111,15 +114,20 @@ class BoutonSeance(discord.ui.View):
         await interaction.response.send_message(f"👋 Tu t'es désinscrit de **{seances[cle]['film']}** !", ephemeral=True)
         await interaction.message.edit(embed=creer_embed(seances[cle], cle), view=BoutonSeance(cle))
 
+rappels_lances = False
+
 @bot.event
 async def on_ready():
+    global rappels_lances
     print(f"✅ Bot connecté en tant que {bot.user}")
     try:
         synced = await bot.tree.sync()
         print(f"✅ {len(synced)} commande(s) synchronisée(s)")
     except Exception as e:
         print(e)
-    bot.loop.create_task(verifier_rappels())
+    if not rappels_lances:
+        rappels_lances = True
+        bot.loop.create_task(verifier_rappels())
 
 async def verifier_rappels():
     await bot.wait_until_ready()
@@ -155,8 +163,8 @@ async def verifier_rappels():
                         )
                         seances[cle]["rappel_envoye"] = True
                         sauvegarder_seances(seances)
-            except:
-                pass
+            except Exception as e:
+                print(f"⚠️ Erreur traitement séance '{cle}': {e}")
 
         # Supprime les séances passées
         for cle in a_supprimer:
